@@ -161,7 +161,11 @@ def generate_time_series_excel_report(details, output_file="detailed_time_series
       - Each company's value for that ratio on that date
       - A column for the computed "Sector Average"
     A chart is inserted for each ratio that visualizes every company's data against the sector average.
+    At the end of each sheet, an evaluation summary (with evaluation points for each company) is appended.
     """
+    # First, compute evaluation data for all sectors using our evaluation function.
+    evaluation_data = compute_company_evaluation(details)
+    
     with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
         workbook = writer.book
         # Process each sector
@@ -182,7 +186,7 @@ def generate_time_series_excel_report(details, output_file="detailed_time_series
                     logging.info(f"No data for ratio {ratio} in sector {sector}.")
                     continue
                 worksheet = writer.sheets[sheet_name]
-                # Write the ratio name as a title
+                # Write the ratio name as a title.
                 worksheet.write(current_row, 0, ratio)
                 current_row += 1
                 # Write the table starting at the current row.
@@ -212,6 +216,25 @@ def generate_time_series_excel_report(details, output_file="detailed_time_series
                 chart_row = table_end + 2
                 worksheet.insert_chart(chart_row, 0, chart)
                 current_row = chart_row + 15  # Update current_row after chart insertion.
+            
+            # --- Append Evaluation Summary at the end of the sheet ---
+            if sector in evaluation_data:
+                logging.info(f"Adding evaluation summary for sector: {sector}")
+                eval_sector = evaluation_data[sector]  # Dictionary: { company: {"Total Score": ..., "Details": ... } }
+                eval_rows = []
+                for company, score_data in eval_sector.items():
+                    eval_rows.append({
+                        "Company": company,
+                        "Total Score": score_data["Total Score"],
+                        "Detail Breakdown": format_ratio_details(score_data["Details"])
+                    })
+                if eval_rows:
+                    eval_df = pd.DataFrame(eval_rows)
+                    eval_df.sort_values(by="Total Score", ascending=False, inplace=True)
+                    worksheet.write(current_row, 0, "Evaluation Summary")
+                    current_row += 1
+                    eval_df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=current_row)
+                    current_row += len(eval_df) + 2
             logging.info(f"Completed writing sector {sector} to Excel.")
         logging.info(f"Excel report generated: {output_file}")
 
