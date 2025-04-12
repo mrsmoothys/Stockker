@@ -145,15 +145,25 @@ def traverse_and_process(root_dir):
     return all_data
 
 # ----- Trend Calculation Helper Functions -----
-def get_trend_series(df, account_substring):
+def get_trend_series(df, account_substring, use_regex=False, context=""):
     """
-    Search the 'account' column for rows that contain the given substring (case insensitive),
-    and return a pandas Series with datetime indices (parsed from period columns in 'YYYY/MM' format)
+    Search the 'account' column for rows that contain the given substring.
+    If use_regex is True, treat account_substring as a regex pattern; otherwise, escape it.
+    Returns a pandas Series with datetime indices (parsed from period columns in 'YYYY/MM' format)
     and the sum of corresponding values as data.
+    The 'context' parameter is used to log additional information about the source (e.g., company name).
     """
-    pattern = re.escape(account_substring)
+    import numpy as np
+    import pandas as pd
+    import logging
+
+    if use_regex:
+        pattern = account_substring
+    else:
+        pattern = re.escape(account_substring)
     mask = df['account'].str.contains(pattern, case=False, na=False)
     if not mask.any():
+        logging.info(f"{context} - No matching rows for pattern '{account_substring}'.")
         return pd.Series(dtype=float)
     matched = df[mask]
     trend_data = {}
@@ -163,8 +173,13 @@ def get_trend_series(df, account_substring):
         try:
             # Parse column header as date (e.g., "2024/12")
             date_val = pd.to_datetime(col, format="%Y/%m", errors='raise')
-            trend_data[date_val] = matched[col].sum()
-        except Exception:
+            value = matched[col].sum()
+            if np.isnan(value) or np.isinf(value):
+                logging.warning(f"{context} - Column '{col}' for account pattern '{account_substring}' produced an invalid sum ({value}). This time point will be omitted.")
+                continue
+            trend_data[date_val] = value
+        except Exception as e:
+            logging.error(f"{context} - Error processing column '{col}' for account pattern '{account_substring}': {e}")
             continue
     if not trend_data:
         return pd.Series(dtype=float)
@@ -209,14 +224,14 @@ def compute_ratios_for_company(sheets):
         amortisman_series = get_trend_series(income_df, "Amortisman")
         ratios["Amortisman/Kar"] = compute_trend_ratio(amortisman_series, brut_kar_series)
         
-        donem_net_series = get_trend_series(income_df, "Dönem Net Kar(/Zararı)?")
+        donem_net_series = get_trend_series(balance_df, "Dönem\s*Net\s*Kar(?:/Zararı)?", use_regex=True)
         ratios["Dönem Net/Brüt Kar"] = compute_trend_ratio(donem_net_series, brut_kar_series)
     else:
         logging.warning("Income Statement data not available for trend ratio calculations.")
     
-    if balance_df is not None and income_df is not None:
+    if balance_df is not None:
         toplam_varlik_series = get_trend_series(balance_df, "Toplam Varlıklar")
-        donem_net_series = get_trend_series(income_df, "Dönem Net Kar(/Zararı)?")
+        donem_net_series = get_trend_series(balance_df, "Dönem\s*Net\s*Kar(?:/Zararı)?", use_regex=True)
         ratios["Dönem Net/Toplam Varlık"] = compute_trend_ratio(donem_net_series, toplam_varlik_series)
     else:
         logging.warning("Balance Sheet or Income Statement missing for Dönem Net/Toplam Varlık trend ratio.")
@@ -228,12 +243,12 @@ def compute_ratios_for_company(sheets):
     else:
         logging.warning("Balance Sheet data missing for Finansal Borç/Özkaynak trend ratio.")
     
-    if cash_df is not None and income_df is not None:
+    if cash_df is not None and balance_df is not None:
         yatirim_nakit_series = get_trend_series(cash_df, "Yatırım Faaliyetlerinden Kaynaklanan Nakit Akışları")
-        donem_net_series = get_trend_series(income_df, "Dönem Net Kar(/Zararı)?")
+        donem_net_series = get_trend_series(balance_df, "Dönem\s*Net\s*Kar(?:/Zararı)?", use_regex=True)
         ratios["Sermaye Harcaması/Dönem Net"] = compute_trend_ratio(yatirim_nakit_series, donem_net_series)
     else:
-        logging.warning("Cash Flow or Income Statement missing for Sermaye Harcaması/Dönem Net trend ratio.")
+        logging.warning("Cash Flow or Balance Sheet missing for Sermaye Harcaması/Dönem Net trend ratio.")
     
     if balance_df is not None:
         gecmis_yil_series = get_trend_series(balance_df, "Geçmiş Yıllar Kar/Zararları")
@@ -242,8 +257,8 @@ def compute_ratios_for_company(sheets):
     else:
         logging.warning("Balance Sheet data missing for Geçmiş Yıl Kar + Yedek Akçe trend ratio.")
     
-    if income_df is not None and balance_df is not None:
-        donem_net_series = get_trend_series(income_df, "Dönem Net Kar(/Zararı)?")
+    if balance_df is not None:
+        donem_net_series = get_trend_series(balance_df, "Dönem\s*Net\s*Kar(?:/Zararı)?", use_regex=True)
         odenmis_sermaye_series = get_trend_series(balance_df, "Ödenmiş Sermaye")
         ratios["Hisse Başı Kazanç"] = compute_trend_ratio(donem_net_series, odenmis_sermaye_series)
     else:
